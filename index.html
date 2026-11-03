@@ -4,69 +4,86 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes">
-<meta name="description" content="Pan and zoom a schematic on Meta Ray-Ban Display.">
+<meta name="description" content="Rotate a 3D wireframe model on Meta Ray-Ban Display.">
 <title>Schematic HUD</title>
 <style>
   /* black = unlit = see-through on the glasses, so only the lines float in view */
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
-  svg { width: 100vw; height: 100vh; display: block; }
-  svg * { vector-effect: non-scaling-stroke; }
-  .w { fill: none; stroke: #4df; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
-  text { fill: #fff; font-size: 22px; }
+  canvas { display: block; width: 100vw; height: 100vh; }
   #hud { position: fixed; right: 12px; bottom: 10px; color: #8ab; font-size: 16px; }
+  #title { position: fixed; left: 12px; top: 10px; color: #fff; font-size: 20px; }
 </style>
 </head>
 <body>
-<!-- Swap this <svg> for your own schematic; keep viewBox="0 0 600 600" or change W in the script -->
-<svg viewBox="0 0 600 600" role="img" aria-label="LED circuit: 9V battery, switch S1, resistor R1 330 ohm, LED D1">
-  <text x="300" y="45" text-anchor="middle">LED CIRCUIT</text>
-  <g class="w">
-    <!-- battery -->
-    <path d="M100 100V285M70 285H130M85 305H115M100 305V500"/>
-    <!-- switch -->
-    <path d="M100 100H215M222 97L272 75M285 100H330"/>
-    <circle cx="220" cy="100" r="5"/><circle cx="280" cy="100" r="5"/>
-    <!-- resistor -->
-    <polyline points="330,100 340,85 355,115 370,85 385,115 400,85 415,115 425,100 430,100"/>
-    <!-- LED -->
-    <path d="M430 100H500V250M475 290H525M500 290V500H100"/>
-    <polygon points="475,250 525,250 500,290"/>
-    <path d="M532 262L556 246M548 246H556V254M532 282L556 266M548 266H556V274"/>
-  </g>
-  <text x="58" y="282">+</text>
-  <text x="145" y="303">9V</text>
-  <text x="250" y="62" text-anchor="middle">S1</text>
-  <text x="380" y="150" text-anchor="middle">R1 330Ω</text>
-  <text x="540" y="320">D1</text>
-</svg>
+<canvas role="img" aria-label="3D wireframe of a 5mm LED"></canvas>
+<div id="title">5mm LED</div>
 <div id="hud"></div>
 <script>
-  const svg = document.querySelector('svg'), hud = document.getElementById('hud');
-  const W = 600, ZOOMS = [1, 2, 4];
-  let z = 0, x = 0, y = 0;
+  // --- model: list of line segments [[x,y,z],[x,y,z]], units ~mm ---
+  const segs = [], TAU = Math.PI * 2;
+  const ring = (r, y, n = 24) => {
+    for (let i = 0; i < n; i++) {
+      const a = i / n * TAU, b = (i + 1) / n * TAU;
+      segs.push([[r * Math.cos(a), y, r * Math.sin(a)], [r * Math.cos(b), y, r * Math.sin(b)]]);
+    }
+  };
+  ring(2.9, 0); ring(2.9, 1);                     // flange
+  ring(2.5, 1); ring(2.5, 6);                     // body
+  ring(2.5 * Math.cos(0.5), 6 + 2.5 * Math.sin(0.5));   // dome latitudes
+  ring(2.5 * Math.cos(1.05), 6 + 2.5 * Math.sin(1.05));
+  for (let i = 0; i < 8; i++) {
+    const t = i / 8 * TAU, c = Math.cos(t), s = Math.sin(t);
+    segs.push([[2.9 * c, 0, 2.9 * s], [2.9 * c, 1, 2.9 * s]]);  // flange edge
+    segs.push([[2.5 * c, 1, 2.5 * s], [2.5 * c, 6, 2.5 * s]]);  // body edge
+    for (let j = 0; j < 6; j++) {                               // dome meridian
+      const p = j / 6 * Math.PI / 2, q = (j + 1) / 6 * Math.PI / 2;
+      segs.push([[2.5 * Math.cos(p) * c, 6 + 2.5 * Math.sin(p), 2.5 * Math.cos(p) * s],
+                 [2.5 * Math.cos(q) * c, 6 + 2.5 * Math.sin(q), 2.5 * Math.cos(q) * s]]);
+    }
+  }
+  segs.push([[1.27, 0, 0], [1.27, -14, 0]]);      // anode (+), longer leg
+  segs.push([[-1.27, 0, 0], [-1.27, -11, 0]]);    // cathode (−)
 
-  function draw() {
-    const w = W / ZOOMS[z];
-    x = Math.min(Math.max(x, 0), W - w);
-    y = Math.min(Math.max(y, 0), W - w);
-    svg.setAttribute('viewBox', `${x} ${y} ${w} ${w}`);
-    hud.textContent = `${ZOOMS[z]}×  ·  pinch: zoom  ·  swipe: pan`;
+  // --- render ---
+  const cv = document.querySelector('canvas'), ctx = cv.getContext('2d'), hud = document.getElementById('hud');
+  const D = 40, STEP = Math.PI / 12;  // camera distance, 15° per swipe
+  let yaw = 0.6, pitch = 0.35, spin = 0;
+
+  function project([x, y, z]) {
+    y += 3;  // center the model vertically
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const x1 = x * cy + z * sy, z1 = z * cy - x * sy;
+    const y1 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+    const k = Math.min(cv.width, cv.height) * 1.1 / (z2 + D);
+    return [cv.width / 2 + x1 * k, cv.height / 2 - y1 * k, z2];
   }
 
+  function draw() {
+    const dpr = devicePixelRatio || 1;
+    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
+    ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#4df'; ctx.lineCap = 'round';
+    for (const [a, b] of segs) {
+      const p = project(a), q = project(b);
+      // depth cue: far lines dimmer, which is most of what makes a wireframe read as 3D
+      ctx.globalAlpha = Math.min(1, Math.max(0.25, 0.6 - (p[2] + q[2]) / 30));
+      ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
+    }
+    hud.textContent = `pinch: spin ${spin ? 'off' : 'on'}  ·  swipe: rotate`;
+  }
+
+  // ponytail: 30 Hz interval while spinning (panel is 30 Hz); render-on-input only when stopped
+  const tick = () => { yaw += 0.02; draw(); };
+  spin = setInterval(tick, 33);
+
   addEventListener('keydown', e => {
-    const w = W / ZOOMS[z], s = w / 4;
-    const move = { ArrowLeft: [-s, 0], ArrowRight: [s, 0], ArrowUp: [0, -s], ArrowDown: [0, s] }[e.key];
-    if (move) { x += move[0]; y += move[1]; }
-    else if (e.key === 'Enter') {
-      // zoom around the current center: 1x -> 2x -> 4x -> 1x
-      const cx = x + w / 2, cy = y + w / 2;
-      z = (z + 1) % ZOOMS.length;
-      x = cx - W / ZOOMS[z] / 2; y = cy - W / ZOOMS[z] / 2;
-    } else return;
+    const turn = { ArrowLeft: [-STEP, 0], ArrowRight: [STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] }[e.key];
+    if (turn) { yaw += turn[0]; pitch += turn[1]; }
+    else if (e.key === 'Enter') spin = spin ? (clearInterval(spin), 0) : setInterval(tick, 33);
+    else return;
     e.preventDefault();
     draw();
   });
-
+  addEventListener('resize', draw);
   draw();
 </script>
 </body>
