@@ -117,6 +117,22 @@
   addEventListener('resize', resize);
   hud.focus();
   resize();
+
+  // Auto-update: GitHub Pages lets devices cache the page for 10 min, so ask for the latest deploy time
+  // and reload with ?v=<that time>. If a stale copy still comes back, ?v already matches, so no reload loop.
+  const builtAt = Date.parse(document.lastModified);
+  document.getElementById('title').textContent +=
+    ' · updated ' + new Date(builtAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  async function checkForUpdate() {
+    try {
+      const r = await fetch(`${location.pathname}?check=${Date.now()}`, { method: 'HEAD', cache: 'no-store' });
+      const latest = Date.parse(r.headers.get('last-modified'));
+      if (latest > builtAt && new URLSearchParams(location.search).get('v') !== String(latest))
+        location.replace(`${location.pathname}?v=${latest}`);
+    } catch {}  // offline: keep running what we have
+  }
+  checkForUpdate();
+  setInterval(checkForUpdate, 60000);
 </script>
 </body>
 </html>
