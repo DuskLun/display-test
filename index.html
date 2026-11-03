@@ -10,14 +10,15 @@
   /* black = unlit = see-through on the glasses, so only the lines float in view */
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
   canvas { display: block; width: 100vw; height: 100vh; }
-  #hud { position: fixed; right: 12px; bottom: 10px; color: #8ab; font-size: 16px; }
+  #hud { position: fixed; right: 12px; bottom: 10px; color: #8ab; font: 16px system-ui, sans-serif; background: none; border: 0; padding: 0; text-align: right; white-space: pre; }
   #title { position: fixed; left: 12px; top: 10px; color: #fff; font-size: 20px; }
 </style>
 </head>
 <body>
 <canvas role="img" aria-label="3D wireframe of a 5mm LED"></canvas>
 <div id="title">5mm LED</div>
-<div id="hud"></div>
+<!-- the one focusable control: pinch on the glasses = Enter = click on this button -->
+<button id="hud" autofocus></button>
 <script>
   // --- model: list of line segments [[x,y,z],[x,y,z]], units ~mm ---
   const segs = [], TAU = Math.PI * 2;
@@ -47,7 +48,9 @@
   // --- render ---
   const cv = document.querySelector('canvas'), ctx = cv.getContext('2d'), hud = document.getElementById('hud');
   const D = 40, STEP = Math.PI / 12;  // camera distance, 15° per swipe
-  let yaw = 0.6, pitch = 0.35, spin = 0;
+  const SIGN = 1;  // calibration: flip to -1 if the model turns the wrong way as you walk around it
+  let yaw = 0.6, pitch = 0.35, mode = 'spin';
+  let heading = null, alpha0 = null, yaw0 = 0, seenAt = 0, raw = '';
 
   function project([x, y, z]) {
     y += 3;  // center the model vertically
@@ -58,33 +61,62 @@
     return [cv.width / 2 + x1 * k, cv.height / 2 - y1 * k, z2];
   }
 
+  function resize() {
+    cv.width = innerWidth * (devicePixelRatio || 1); cv.height = innerHeight * (devicePixelRatio || 1);
+    draw();
+  }
+
   function draw() {
-    const dpr = devicePixelRatio || 1;
-    cv.width = innerWidth * dpr; cv.height = innerHeight * dpr;
-    ctx.lineWidth = 2 * dpr; ctx.strokeStyle = '#4df'; ctx.lineCap = 'round';
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.lineWidth = 2 * (devicePixelRatio || 1); ctx.strokeStyle = '#4df'; ctx.lineCap = 'round';
     for (const [a, b] of segs) {
       const p = project(a), q = project(b);
       // depth cue: far lines dimmer, which is most of what makes a wireframe read as 3D
       ctx.globalAlpha = Math.min(1, Math.max(0.25, 0.6 - (p[2] + q[2]) / 30));
       ctx.beginPath(); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); ctx.stroke();
     }
-    hud.textContent = `pinch: spin ${spin ? 'off' : 'on'}  ·  swipe: rotate`;
+    hud.textContent = mode === 'spin' ? 'pinch: walk-around mode  ·  swipe: rotate'
+      : (performance.now() - seenAt > 1000 ? 'waiting for head tracking…' : `walk-around  ${raw}`)
+        + '\npinch: spin mode  ·  swipe: adjust';
   }
 
-  // ponytail: 30 Hz interval while spinning (panel is 30 Hz); render-on-input only when stopped
-  const tick = () => { yaw += 0.02; draw(); };
-  spin = setInterval(tick, 33);
+  // Walk-around: no position tracking exists, so map head heading to model yaw.
+  // Circling the spot while facing it turns your heading 360°, so you see each side.
+  // ponytail: heading-only, so turning your head in place also turns the model; true 6DoF needs position tracking Meta doesn't expose
+  addEventListener('deviceorientation', e => {
+    if (!Number.isFinite(e.alpha)) return;
+    if (alpha0 === null) { alpha0 = e.alpha; yaw0 = yaw; }
+    heading = e.alpha; seenAt = performance.now();
+    raw = `α${e.alpha | 0} β${e.beta | 0} γ${e.gamma | 0}`;  // shown so axes can be checked on-device
+  });
+
+  // ponytail: one 30 Hz loop (panel is 30 Hz), sensor events only store the latest reading
+  setInterval(() => {
+    if (mode === 'spin') yaw += 0.02;
+    else if (alpha0 !== null) yaw = yaw0 + SIGN * (heading - alpha0) * Math.PI / 180;
+    draw();
+  }, 33);
+
+  hud.addEventListener('click', async () => {
+    if (mode === 'walk') { mode = 'spin'; return draw(); }
+    try {
+      const ask = window.DeviceOrientationEvent && DeviceOrientationEvent.requestPermission;
+      if (ask && await DeviceOrientationEvent.requestPermission() !== 'granted') throw 0;
+    } catch { hud.textContent = 'motion sensor access was not granted\npinch to try again'; return; }
+    mode = 'walk'; alpha0 = null;  // whatever angle you see now becomes "straight ahead"
+    draw();
+  });
 
   addEventListener('keydown', e => {
     const turn = { ArrowLeft: [-STEP, 0], ArrowRight: [STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] }[e.key];
-    if (turn) { yaw += turn[0]; pitch += turn[1]; }
-    else if (e.key === 'Enter') spin = spin ? (clearInterval(spin), 0) : setInterval(tick, 33);
-    else return;
+    if (!turn) return;  // Enter falls through to the button's click
+    yaw += turn[0]; yaw0 += turn[0]; pitch += turn[1];
     e.preventDefault();
     draw();
   });
-  addEventListener('resize', draw);
-  draw();
+  addEventListener('resize', resize);
+  hud.focus();
+  resize();
 </script>
 </body>
 </html>
