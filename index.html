@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="mrbd-web-app-capable" content="yes">
+<meta name="description" content="Pan and zoom a schematic on Meta Ray-Ban Display.">
+<title>Schematic HUD</title>
+<style>
+  /* black = unlit = see-through on the glasses, so only the lines float in view */
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
+  svg { width: 100vw; height: 100vh; display: block; }
+  svg * { vector-effect: non-scaling-stroke; }
+  .w { fill: none; stroke: #4df; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  text { fill: #fff; font-size: 22px; }
+  #hud { position: fixed; right: 12px; bottom: 10px; color: #8ab; font-size: 16px; }
+</style>
+</head>
+<body>
+<!-- Swap this <svg> for your own schematic; keep viewBox="0 0 600 600" or change W in the script -->
+<svg viewBox="0 0 600 600" role="img" aria-label="LED circuit: 9V battery, switch S1, resistor R1 330 ohm, LED D1">
+  <text x="300" y="45" text-anchor="middle">LED CIRCUIT</text>
+  <g class="w">
+    <!-- battery -->
+    <path d="M100 100V285M70 285H130M85 305H115M100 305V500"/>
+    <!-- switch -->
+    <path d="M100 100H215M222 97L272 75M285 100H330"/>
+    <circle cx="220" cy="100" r="5"/><circle cx="280" cy="100" r="5"/>
+    <!-- resistor -->
+    <polyline points="330,100 340,85 355,115 370,85 385,115 400,85 415,115 425,100 430,100"/>
+    <!-- LED -->
+    <path d="M430 100H500V250M475 290H525M500 290V500H100"/>
+    <polygon points="475,250 525,250 500,290"/>
+    <path d="M532 262L556 246M548 246H556V254M532 282L556 266M548 266H556V274"/>
+  </g>
+  <text x="58" y="282">+</text>
+  <text x="145" y="303">9V</text>
+  <text x="250" y="62" text-anchor="middle">S1</text>
+  <text x="380" y="150" text-anchor="middle">R1 330Ω</text>
+  <text x="540" y="320">D1</text>
+</svg>
+<div id="hud"></div>
+<script>
+  const svg = document.querySelector('svg'), hud = document.getElementById('hud');
+  const W = 600, ZOOMS = [1, 2, 4];
+  let z = 0, x = 0, y = 0;
+
+  function draw() {
+    const w = W / ZOOMS[z];
+    x = Math.min(Math.max(x, 0), W - w);
+    y = Math.min(Math.max(y, 0), W - w);
+    svg.setAttribute('viewBox', `${x} ${y} ${w} ${w}`);
+    hud.textContent = `${ZOOMS[z]}×  ·  pinch: zoom  ·  swipe: pan`;
+  }
+
+  addEventListener('keydown', e => {
+    const w = W / ZOOMS[z], s = w / 4;
+    const move = { ArrowLeft: [-s, 0], ArrowRight: [s, 0], ArrowUp: [0, -s], ArrowDown: [0, s] }[e.key];
+    if (move) { x += move[0]; y += move[1]; }
+    else if (e.key === 'Enter') {
+      // zoom around the current center: 1x -> 2x -> 4x -> 1x
+      const cx = x + w / 2, cy = y + w / 2;
+      z = (z + 1) % ZOOMS.length;
+      x = cx - W / ZOOMS[z] / 2; y = cy - W / ZOOMS[z] / 2;
+    } else return;
+    e.preventDefault();
+    draw();
+  });
+
+  draw();
+</script>
+</body>
+</html>
